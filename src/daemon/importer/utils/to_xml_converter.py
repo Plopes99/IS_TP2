@@ -3,9 +3,9 @@ import xml.dom.minidom as md
 import xml.etree.ElementTree as ET
 
 from utils.reader import CSVReader
+from entities.category import Category
 from entities.country import Country
-from entities.team import Team
-from entities.player import Player
+from entities.disaster import Disaster
 
 
 class CSVtoXMLConverter:
@@ -14,52 +14,68 @@ class CSVtoXMLConverter:
         self._reader = CSVReader(path)
 
     def to_xml(self):
+
         # read countries
         countries = self._reader.read_entities(
-            attr="nationality",
-            builder=lambda row: Country(row["nationality"])
+            attr="Country",
+            builder=lambda row: Country(row["Country"])
         )
 
-        # read top_teams
-        teams = self._reader.read_entities(
-            attr="Current Club",
-            builder=lambda row: Team(row["Current Club"])
+        # read categories
+        categories = self._reader.read_entities(
+            attr="category",
+            builder=lambda row: Category(row["category"])
         )
 
-        # read players
-
-        def after_creating_player(player, row):
-            # add the player to the appropriate team
-            teams[row["Current Club"]].add_player(player)
+        # read disasters
+        def after_creating_disaster(disaster, row):
+            # add the disaster to the appropriate country
+            countries[row["Country"]].add_disaster(disaster)
 
         self._reader.read_entities(
-            attr="full_name",
-            builder=lambda row: Player(
-                name=row["full_name"],
-                age=row["age"],
-                country=countries[row["nationality"]]
+            attr="date",
+            builder=lambda row: Disaster(
+                date=row["date"],
+                aircraft_type=row["Air-craft type"],
+                operator=row["operator"],
+                fatalities=row["fatilites"],
+                category_code=row["category"]
             ),
-            after_create=after_creating_player
+            after_create=after_creating_disaster
         )
 
         # generate the final xml
-        root_el = ET.Element("Football")
+        root_el = ET.Element("airplane_disasters")
 
-        teams_el = ET.Element("Teams")
-        for team in teams.values():
-            teams_el.append(team.to_xml())
+        for category in categories.values():
+            category_el = ET.Element("category")
+            category_el.set("name", category._code)
+            category_el.set("accident_type", category._accident_type)
+            category_el.set("damage_type", category._damage_type)
 
-        countries_el = ET.Element("Countries")
-        for country in countries.values():
-            countries_el.append(country.to_xml())
+            for country in countries.values():
+                country_el = ET.Element("country")
+                country_el.set("name", country._name)
 
-        root_el.append(teams_el)
-        root_el.append(countries_el)
+                for disaster in country._disasters:
+                    if disaster._category_code == category._code:
+                        disaster_el = ET.Element("disaster")
+                        disaster_el.append(ET.Element("date", text=disaster._date))
+                        disaster_el.append(ET.Element("aircraft_type", text=disaster._aircraft_type))
+                        disaster_el.append(ET.Element("operator", text=disaster._operator))
+                        disaster_el.append(ET.Element("fatalities", text=str(disaster._fatalities)))
+
+                        country_el.append(disaster_el)
+
+                category_el.append(country_el)
+
+            root_el.append(category_el)
 
         return root_el
 
     def to_xml_str(self):
-        xml_str = ET.tostring(self.to_xml(), encoding='utf8', method='xml').decode()
+        xml_tree = self.to_xml()
+        xml_str = ET.tostring(xml_tree, encoding='utf-8', method='xml').decode()
+
         dom = md.parseString(xml_str)
         return dom.toprettyxml()
-

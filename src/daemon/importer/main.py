@@ -1,6 +1,7 @@
 import asyncio
 import time
 import uuid
+import psycopg2
 
 import os
 from watchdog.observers import Observer
@@ -48,10 +49,38 @@ class CSVHandler(FileSystemEventHandler):
         print(f"new xml file generated: '{xml_path}'")
 
         # !TODO: we should store the XML document into the imported_documents table
+        try:
+            connection = psycopg2.connect(
+                    user="is",
+                    password="is",
+                    host="localhost",
+                    port="10001",
+                    database="is"
+            )
+            cursor = connection.cursor()
+            try:
+                with open(xml_path, 'r') as xml_file:
+                    xml_content = xml_file.read()
+
+                cursor.execute('INSERT INTO imported_documents (file_name, xml) VALUES (%s, %s)', (xml_path, xml_content))
+                connection.commit()
+                print(f"XML document stored in the imported_documents table")
+
+                cursor.execute('INSERT INTO converted_documents (src, file_size, dst) VALUES (%s, %s, %s)', (csv_path, os.path.getsize(csv_path),xml_path))
+                connection.commit()
+                print(f"Details from the XML were stored in the converted_documents table")
+
+        except Exception as e:
+            print(f"Erro de conexão: {e}")
+        finally:
+            if connection is not None:
+                connection.close()
 
     async def get_converted_files(self):
         # !TODO: you should retrieve from the database the files that were already converted before
-        return []
+        cursor.execute('SELECT DISTINCT src FROM converted_documents')
+        converted_files = [row[0] for row in cursor.fetchall()]
+        return converted_files
 
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith(".csv"):
