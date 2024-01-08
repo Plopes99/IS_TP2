@@ -186,8 +186,8 @@ services:
     volumes:
       - ./src/examples/golang:/usr/src/app
       - ./docker/volumes/xml:/xml
-    environment:
-      USE_DEV_MODE: ${USE_DEV_MODE}
+    env_file:
+      - .env
 
   # Container that runs a elixir exmaple
   elixir-example:
