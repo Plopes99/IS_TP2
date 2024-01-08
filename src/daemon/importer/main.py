@@ -4,6 +4,7 @@ import uuid
 import psycopg2
 
 import os
+from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileCreatedEvent
 
@@ -15,6 +16,19 @@ def get_csv_files_in_input_folder():
 
 def generate_unique_file_name(directory):
     return f"{directory}/{str(uuid.uuid4())}.xml"
+async def get_database_connection():
+    try:
+        connection = psycopg2.connect(
+            user="is",
+            password="is",
+            host="db-xml",
+            port="5432",
+            database="is"
+        )
+        return connection
+    except Exception as e:
+        print(f"Error establishing database connection: {e}")
+        return None
 
 def convert_csv_to_xml(in_path, out_path):
     converter = CSVtoXMLConverter(in_path)
@@ -43,44 +57,62 @@ class CSVHandler(FileSystemEventHandler):
         # we generate a unique file name for the XML file
         xml_path = generate_unique_file_name(self._output_path)
 
-        # we do the conversion
-        # !TODO: once the conversion is done, we should updated the converted_documents tables
         convert_csv_to_xml(csv_path, xml_path)
         print(f"new xml file generated: '{xml_path}'")
 
-        # !TODO: we should store the XML document into the imported_documents table
-        try:
-            connection = psycopg2.connect(
-                    user="is",
-                    password="is",
-                    host="localhost",
-                    port="10001",
-                    database="is"
-            )
-            cursor = connection.cursor()
+        connection = await get_database_connection()
+        if connection is not None:
             try:
-                with open(xml_path, 'r') as xml_file:
-                    xml_content = xml_file.read()
+                with connection, connection.cursor() as cursor:
 
-                cursor.execute('INSERT INTO imported_documents (file_name, xml) VALUES (%s, %s)', (xml_path, xml_content))
-                connection.commit()
-                print(f"XML document stored in the imported_documents table")
+                    with open(xml_path, 'r') as xml_file:
+                        xml_content = xml_file.read()
 
-                cursor.execute('INSERT INTO converted_documents (src, file_size, dst) VALUES (%s, %s, %s)', (csv_path, os.path.getsize(csv_path),xml_path))
-                connection.commit()
-                print(f"Details from the XML were stored in the converted_documents table")
+                    cursor.execute('INSERT INTO imported_documents (file_name, xml) VALUES (%s, %s)', (xml_path, xml_content))
+                    connection.commit()
+                    print(f"XML document stored in the imported_documents table")
 
-        except Exception as e:
-            print(f"Erro de conexão: {e}")
-        finally:
-            if connection is not None:
+                    cursor.execute('INSERT INTO converted_documents (src, file_size, dst) VALUES (%s, %s, %s)', (csv_path, os.path.getsize(csv_path),xml_path))
+                    connection.commit()
+                    print(f"Details from the XML were stored in the converted_documents table")
+
+
+
+            except psycopg2.IntegrityError as e:
+                if "duplicate key value violates unique constraint" in str(e):
+                    print("XML document already inserted in converted_documents table")
+                else:
+                    raise
+
+            except Exception as e:
+
+                print(f"Other error: {e}")
+
+            finally:
                 connection.close()
 
     async def get_converted_files(self):
         # !TODO: you should retrieve from the database the files that were already converted before
-        cursor.execute('SELECT DISTINCT src FROM converted_documents')
-        converted_files = [row[0] for row in cursor.fetchall()]
-        return converted_files
+        connection = await get_database_connection()
+        if connection is not None:
+            try:
+                cursor = connection.cursor()
+
+            # Fetch the file names from the converted_documents table
+                cursor.execute('SELECT dst FROM converted_documents')
+                converted_files = [record[0] for record in cursor.fetchall()]
+                print(converted_files[0])
+                return converted_files
+
+            except Exception as e:
+                print(f"Error fetching converted files: {e}")
+                return []
+
+
+            finally:
+                if connection is not None:
+                    connection.close()
+
 
     def on_created(self, event):
         if not event.is_directory and event.src_path.endswith(".csv"):
@@ -106,3 +138,4 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         observer.stop()
         observer.join()
+
