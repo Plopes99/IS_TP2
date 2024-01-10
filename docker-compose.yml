@@ -179,15 +179,15 @@ services:
     environment:
       API_PORT: ${API_PORT}
 
-  # Container that runs a golang exmaple
-  golang-example:
-    container_name: golang-example
+  # Container that runs a watcher exmaple
+  db-watcher:
+    container_name: db-watcher
     build: docker/images/golang
     volumes:
-      - ./src/examples/golang:/usr/src/app
+      - ./src/daemon/watcher:/usr/src/app
       - ./docker/volumes/xml:/xml
-    environment:
-      USE_DEV_MODE: ${USE_DEV_MODE}
+    env_file:
+      - .env
 
   # Container that runs a elixir exmaple
   elixir-example:
