@@ -1,3 +1,13 @@
+# TP2 - IS  Desastres Aéreos #
+
+O presente trabalho prático 2 (TP2) tem como objetivo desenvolver as capacidades dos estudantes na integração de diferentes serviços através da escrita de APIs, importação de dados e integração entre bases de dados e outros serviços. Leia atentamente todo o enunciado e contacte os docentes da disciplina em caso de dúvidas.
+
+# Membros do Grupo #
+
+- Pedro Lopes, nº21849
+- João Cruzeiro, nº23830
+- Samuel Gomes, nº23434
+
 # Systems Integration Development Kit #
 
 ### Introduction ###
