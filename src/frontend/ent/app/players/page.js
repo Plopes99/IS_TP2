@@ -69,7 +69,7 @@ export default function PlayersPage({pagea}) {
 
     useEffect(() => {
         //!FIXME: this is to simulate how to retrieve data from the server
-        //!FIXME: the entities server URL is available on process.env.REACT_APP_API_ENTITIES_URL
+        //!FIXME: the entities server URL is available on process..env.REACT_APP_API_ENTITIES_URL
         setData(null);
         setTimeout(() => {
             console.log(`fetching from ${process.env.NEXT_PUBLIC_API_ENTITIES_URL}`)
