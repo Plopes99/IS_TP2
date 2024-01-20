@@ -15,7 +15,6 @@ import (
 )
 
 const (
-	// ... (constantes existentes)
 	queueName    = "migrator_queue"
 	routingKey   = "new_file"
 	exchangeName = "xml_files"
@@ -34,12 +33,18 @@ var (
 	rabbitMQPort  = 5672
 )
 
+type GeoLocation struct {
+	Latitude  float64
+	Longitude float64
+}
+
 type DisasterMessage struct {
 	Date         string
 	AircraftType string
 	Operator     string
 	Fatalities   string
 	Country      string
+	Geo          *GeoLocation
 }
 
 type CountryMessage struct {
@@ -157,49 +162,52 @@ func processXML(xmlContent string, ch *amqp.Channel) error {
 		case xml.EndElement:
 			switch se.Name.Local {
 			case "category":
-				categoryMessage := CategoryMessage{
-					Name:         category.Name,
-					AccidentType: category.AccidentType,
-					DamageType:   category.DamageType,
-				}
+				// categoryMessage := CategoryMessage{
+				// 	Name:         category.Name,
+				// 	AccidentType: category.AccidentType,
+				// 	DamageType:   category.DamageType,
+				// }
 
-				xmlData, err := xml.Marshal(categoryMessage)
-				if err != nil {
-					log.Println("Error marshaling XML category:", err)
-					continue
-				}
-
-				err = publishToRabbitMQ(ch, exchangeName, routingKey, "category", xmlData)
-				if err != nil {
-					log.Println("Error publishing message to RabbitMQ:", err)
-				}
-			case "country":
-				// ... (mesmo que o código anterior)
-
-				xmlData, err := xml.Marshal(currentCountry)
-				if err != nil {
-					log.Println("Error marshaling XML country:", err)
-					continue
-				}
-
-				err = publishToRabbitMQ(ch, exchangeName, routingKey, "country", xmlData)
-				if err != nil {
-					log.Println("Error publishing country message to RabbitMQ:", err)
-				}
-			case "disaster":
-				// ... (mesmo que o código anterior)
-
-				// Descomente esta seção se desejar publicar mensagens de desastres
-				// xmlData, err := xml.Marshal(currentDisaster)
+				// xmlData, err := xml.Marshal(categoryMessage)
 				// if err != nil {
-				// 	log.Println("Error marshaling XML disaster:", err)
+				// 	log.Println("Error marshaling XML category:", err)
 				// 	continue
 				// }
 
-				// err = publishToRabbitMQ(ch, exchangeName, routingKey, "disaster", xmlData)
+				// err = publishToRabbitMQ(ch, exchangeName, routingKey, "category", xmlData)
 				// if err != nil {
-				// 	log.Println("Error publishing disaster message to RabbitMQ:", err)
+				// 	log.Println("Error publishing message to RabbitMQ:", err)
 				// }
+			case "country":
+				// xmlData, err := xml.Marshal(currentCountry)
+				// if err != nil {
+				// 	log.Println("Error marshaling XML country:", err)
+				// 	continue
+				// }
+
+				// err = publishToRabbitMQ(ch, exchangeName, routingKey, "country", xmlData)
+				// if err != nil {
+				// 	log.Println("Error publishing country message to RabbitMQ:", err)
+				// }
+			case "disaster":
+				xmlData, err := xml.Marshal(currentDisaster)
+				if err != nil {
+					log.Println("Error marshaling XML disaster:", err)
+					continue
+				}
+
+				if currentDisaster.Geo == nil {
+					err = publishToRabbitMQ(ch, exchangeName, routingKey, "disaster without geo", xmlData)
+					if err != nil {
+						log.Println("Error publishing disaster message to RabbitMQ:", err)
+					}
+				} else {
+					err = publishToRabbitMQ(ch, exchangeName, routingKey, "disaster", xmlData)
+					if err != nil {
+						log.Println("Error publishing disaster message to RabbitMQ:", err)
+					}
+				}
+
 			}
 		}
 	}
@@ -227,6 +235,7 @@ func main() {
 	}
 	defer stmt.Close()
 
+	fmt.Println(" [*] Waiting for changes in DB. To exit, press CTRL+C")
 	lastCheckTime := time.Now()
 
 	for {
@@ -251,7 +260,8 @@ func main() {
 				log.Println("Error processing XML:", err)
 			}
 
-			log.Printf("New XML file detected: %s (created on %s)\n", fileName, createdOn.Format(time.RFC3339))
+			fmt.Printf(" [*] New XML file detected: %s (created on %s)\n", fileName, createdOn.Format(time.RFC3339))
+
 		}
 
 		lastCheckTime = time.Now()
