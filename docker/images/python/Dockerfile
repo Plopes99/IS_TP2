@@ -6,7 +6,7 @@ WORKDIR /usr/src/app
 RUN apk add bash
 
 # install dependencies to communicate with postgres datbases
-RUN apk add postgresql-dev gcc python3-dev musl-dev
+RUN apk add --no-cache postgresql-dev gcc python3-dev musl-dev
 
 # install nodemon
 RUN apk add --update nodejs npm
