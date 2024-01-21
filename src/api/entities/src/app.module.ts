@@ -7,9 +7,10 @@ import { CountriesService } from './countries/countries.service';
 import { CountriesController } from './countries/countries.controller';
 import { CountriesModule } from './countries/countries.module';
 import { CategoriesModule } from './categories/categories.module';
+import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
-  imports: [TeachersModule, DisastersModule, CountriesModule, CategoriesModule],
+  imports: [TeachersModule, DisastersModule, CountriesModule, CategoriesModule, PrismaModule],
   controllers: [AppController, CountriesController],
   providers: [AppService, CountriesService],
 })
