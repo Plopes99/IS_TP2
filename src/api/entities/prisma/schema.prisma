@@ -10,12 +10,41 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Teacher {
-  name       String   @id
-  city       String
-  createdOn  DateTime @default(now()) @map("created_on")
-  updatedOn  DateTime @updatedAt @map("updated_on")
+model Category {
+  id             String    @id @default(dbgenerated("uuid-ossp")) @map("id")
+  categoryName   String    @map("category_name")
+  accidentsTypes String?   @map("accidents_types")
+  damageTypes    String?   @map("damage_types")
+  createdOn      DateTime  @default(now()) @map("created_on")
+  updatedOn      DateTime  @updatedAt @map("updated_on")
 
-  @@map("teachers")
+  countries      Country[]
+  @@map("categories")
 }
 
+model Country {
+  id          String   @id @default(dbgenerated("uuid-ossp")) @map("id")
+  countryName String   @map("country_name") @unique
+  categoryId  String?  @map("category_id")
+  createdOn   DateTime @default(now()) @map("created_on")
+  updatedOn   DateTime @updatedAt @map("updated_on")
+
+  disasters   Disaster[]
+  category    Category? @relation(fields: [categoryId], references: [id])
+  @@map("countries")
+}
+
+model Disaster {
+  id            String   @id @default(dbgenerated("uuid-ossp")) @map("id")
+  date          DateTime?
+  geom          Json?    @map("geom")
+  aircraftType  String?  @map("aircraft_type")
+  operator      String?  @map("operator")
+  fatalities    Int?
+  countryId     String?  @map("country_id")
+  createdOn     DateTime @default(now()) @map("created_on")
+  updatedOn     DateTime @updatedAt @map("updated_on")
+
+  country Country? @relation(fields: [countryId], references: [id])
+  @@map("disasters")
+}
