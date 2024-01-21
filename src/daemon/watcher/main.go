@@ -195,7 +195,6 @@ func processXML(xmlContent string, ch *amqp.Channel) error {
 					log.Println("Error marshaling XML disaster:", err)
 					continue
 				}
-
 				if currentDisaster.Geo == nil {
 					err = publishToRabbitMQ(ch, exchangeName, routingKey, "disaster without geo", xmlData)
 					if err != nil {

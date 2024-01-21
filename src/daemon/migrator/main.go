@@ -1,10 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"database/sql"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/streadway/amqp"
@@ -16,7 +23,7 @@ const (
 
 var (
 	dbParams = map[string]string{
-		"host":     "db-xml",
+		"host":     "db-rel",
 		"user":     "is",
 		"password": "is",
 		"dbname":   "is",
@@ -35,27 +42,34 @@ type CountryMessage struct {
 	Name string `xml:"Name"`
 }
 
+type CountriesDTO struct {
+	CountryName string `json:"countryName"`
+}
+
+type DisasterDto struct {
+	Date         time.Time `json:"date"`
+	AircraftType string    `json:"aircraftType"`
+	Operator     string    `json:"operator"`
+	Fatalities   int       `json:"fatalities"`
+	CountryId    string    `json:"countryId"`
+}
+
 type DisasterMessage struct {
 	Date         string `xml:"Date"`
 	AircraftType string `xml:"AircraftType"`
 	Operator     string `xml:"Operator"`
 	Fatalities   string `xml:"Fatalities"`
+	Country      string `xml:"Country"`
 }
-
+type CategoriesDto struct {
+	CategoryName   string `json:"categoryName"`
+	AccidentsTypes string `json:"accidentsTypes"`
+	DamageTypes    string `json:"damageTypes"`
+}
 type CategoryMessage struct {
-	Name string `xml:"Name"`
-}
-
-func processCountryMessage(body []byte) {
-	var countryMessage CountryMessage
-	err := xml.Unmarshal(body, &countryMessage)
-	if err != nil {
-		log.Println("Error processing country message:", err)
-		return
-	}
-
-	// Do something with the country message (e.g., insert into the database)
-	fmt.Println("Processing country message:", countryMessage.Name)
+	Name         string `xml:"Name"`
+	AccidentType string `xml:"AccidentType"`
+	DamageType   string `xml:"DamageType"`
 }
 
 func connectToRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
@@ -81,7 +95,6 @@ func connectToPostgreSQL() (*sql.DB, error) {
 		return nil, fmt.Errorf("Error connecting to PostgreSQL: %v", err)
 	}
 
-	// You may want to ping the database to ensure the connection is successful
 	err = db.Ping()
 	if err != nil {
 		db.Close()
@@ -89,6 +102,101 @@ func connectToPostgreSQL() (*sql.DB, error) {
 	}
 
 	return db, nil
+}
+
+func sendPostRequest(endpoint string, data []byte) {
+	// Defina um tempo limite para a solicitação
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	// Faça uma solicitação POST para o endpoint especificado
+	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(data))
+	if err != nil {
+		// Verifique se o erro é devido a um timeout
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+		} else {
+			log.Fatal("Error sending POST request:", err)
+		}
+		return
+	}
+	defer resp.Body.Close()
+
+	// Verifica o sucesso, 200 ou 201
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		log.Printf("Error: Unexpected status code %d\n", resp.StatusCode)
+		return
+	}
+
+	fmt.Printf("POST request to %s successful\n", endpoint)
+}
+
+func processCountryMessage(body []byte) {
+	var coutryMessage CountryMessage
+	err := xml.Unmarshal(body, &coutryMessage)
+	if err != nil {
+		log.Println("Error processing country message:", err)
+		return
+	}
+
+	jsonData, err := json.Marshal(CountriesDTO{
+		CountryName: coutryMessage.Name,
+	})
+	if err != nil {
+		log.Println("Error converting category message to JSON:", err)
+		return
+	}
+
+	fmt.Println("Converted Category Message to JSON:", string(jsonData))
+
+	sendPostRequest("http://api-entities:8080/countries", jsonData)
+}
+
+// Função para obter o country id para chave estrangeira na tabela disasters
+func getCountryIDByName(countryName string) (string, error) {
+	//String for conection
+	connStr := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
+		dbParams["host"], dbParams["user"], dbParams["password"], dbParams["dbname"], dbParams["port"])
+
+	//Open conection
+	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+
+	// Get country_id
+	var countryID string
+	err = db.QueryRow("SELECT id FROM countries WHERE country_name = $1", countryName).Scan(&countryID)
+	if err != nil {
+		return "", err
+	}
+
+	return countryID, nil
+}
+
+// Função para tratar Fatalities com campos nulos e invalidos
+func parseFatalities(fatalities string) (int, error) {
+	if fatalities == "" {
+		return 0, nil
+	}
+
+	if strings.Contains(fatalities, "+") {
+		parts := strings.Split(fatalities, "+")
+
+		totalFatalities := 0
+		for _, part := range parts {
+			num, err := strconv.Atoi(strings.TrimSpace(part))
+			if err != nil {
+				return 0, err
+			}
+			totalFatalities += num
+		}
+
+		return totalFatalities, nil
+	}
+
+	return strconv.Atoi(fatalities)
 }
 
 func processDisasterMessage(body []byte) {
@@ -99,8 +207,45 @@ func processDisasterMessage(body []byte) {
 		return
 	}
 
-	// Do something with the disaster message (e.g., insert into the database)
-	fmt.Println("Processing disaster message:", disasterMessage.Date, disasterMessage.AircraftType, disasterMessage.Operator, disasterMessage.Fatalities)
+	countryID, err := getCountryIDByName(disasterMessage.Country)
+
+	parsedDate, err := parseDate(disasterMessage.Date)
+
+	fatalities, err := parseFatalities(disasterMessage.Fatalities)
+	if err != nil {
+		log.Println("Error parsing fatalities:", err)
+		return
+	}
+
+	jsonData, err := json.Marshal(DisasterDto{
+		Date:         parsedDate,
+		AircraftType: disasterMessage.AircraftType,
+		Operator:     disasterMessage.Operator,
+		Fatalities:   fatalities,
+		CountryId:    countryID,
+	})
+	if err != nil {
+		log.Println("Error converting disaster message to JSON:", err)
+		return
+	}
+
+	sendPostRequest("http://api-entities:8080/disasters", jsonData)
+}
+
+// função para tratar datas
+func parseDate(dateString string) (time.Time, error) {
+	dateLayouts := []string{"02-Jan-2006", "??-???-2006", "02-???-2006"}
+	var parsedDate time.Time
+	var parseError error
+
+	for _, layout := range dateLayouts {
+		parsedDate, parseError = time.Parse(layout, dateString)
+		if parseError == nil {
+			break
+		}
+	}
+
+	return parsedDate, parseError
 }
 
 func processCategoryMessage(body []byte) {
@@ -110,8 +255,21 @@ func processCategoryMessage(body []byte) {
 		log.Println("Error processing category message:", err)
 		return
 	}
-	// Do something with the category message (e.g., insert into the database)
-	fmt.Println("Processing category message:", categoryMessage.Name)
+
+	// Converte a estrutura de dados para JSON
+	jsonData, err := json.Marshal(CategoriesDto{
+		CategoryName:   categoryMessage.Name,
+		AccidentsTypes: categoryMessage.AccidentType,
+		DamageTypes:    categoryMessage.DamageType,
+	})
+	if err != nil {
+		log.Println("Error converting category message to JSON:", err)
+		return
+	}
+
+	fmt.Println("Converted Category Message to JSON:", string(jsonData))
+
+	sendPostRequest("http://api-entities:8080/categories", jsonData)
 }
 
 func callback(ch *amqp.Channel, delivery amqp.Delivery) {
@@ -120,7 +278,7 @@ func callback(ch *amqp.Channel, delivery amqp.Delivery) {
 	switch contentType {
 	case "country":
 		processCountryMessage(delivery.Body)
-	case "disaster":
+	case "disaster without geo":
 		processDisasterMessage(delivery.Body)
 	case "category":
 		processCategoryMessage(delivery.Body)

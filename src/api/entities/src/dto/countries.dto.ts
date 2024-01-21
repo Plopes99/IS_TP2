@@ -4,7 +4,5 @@ export class CountryDTO {
     @IsString()
     countryName?: string;
     
-    @IsString()
-    categoryId?: string; // Chave estrangeira
 
 }

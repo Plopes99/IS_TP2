@@ -9,7 +9,7 @@ export class DisastersService {
     async getDisasters() {
         const disasters = await this.prisma.disaster.findMany({
             select: {
-                country: true,
+                countryId: true,
                 date: true,
                 fatalities: true,
                 operator: true,
@@ -27,8 +27,8 @@ export class DisastersService {
                     date: dto.date,
                     fatalities: dto.fatalities,
                     operator: dto.operator,
-                    aircraftType: dto.aircraftType
-
+                    aircraftType: dto.aircraftType,
+                    countryId: dto.countryId
                 }
             })
         } catch (error) {

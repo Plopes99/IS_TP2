@@ -1,9 +1,10 @@
 import { IsDate, IsOptional, IsString, IsNumber } from 'class-validator';
 
 export class DisasterDTO {
-  @IsDate()
+  @IsString()
   date?: Date;
 
+  @IsOptional()
   @IsString()
   geom?: any;
 
@@ -18,10 +19,4 @@ export class DisasterDTO {
 
   @IsString()
   countryId?: string;
-
-  @IsDate()
-  createdOn?: Date;
-
-  @IsDate()
-  updatedOn?: Date;
 }
