@@ -10,7 +10,7 @@ export class CountriesService {
     async getCountries() {
         const country = await this.prisma.country.findMany({
             select: {
-                countryName: true,
+                countryName: true
             }
         })
         if (country.length === 0) return { message: "Não foram encontrados Países" }

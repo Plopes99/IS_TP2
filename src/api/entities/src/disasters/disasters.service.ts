@@ -16,7 +16,7 @@ export class DisastersService {
                 aircraftType: true
             }
         })
-        if (disasters.length === 0) return { message: "Não foram encontrados Categorias!" }
+        if (disasters.length === 0) return { message: "Não foram encontrados Categorias!!" }
         return disasters;
     }
 

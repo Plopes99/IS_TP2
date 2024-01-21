@@ -8,7 +8,7 @@ export class CountriesController {
 
     @Get()
     async getCoutries(){
-      return this.countryService.getCountries;
+      return this.countryService.getCountries();
     }
 
     @Post()
