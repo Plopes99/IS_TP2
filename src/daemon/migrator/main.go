@@ -149,7 +149,7 @@ func processCountryMessage(body []byte) {
 
 	fmt.Println("Converted Category Message to JSON:", string(jsonData))
 
-	sendPostRequest("http://api-entities:8080/countries", jsonData)
+	//sendPostRequest("http://api-entities:8080/countries", jsonData)
 }
 
 // Função para obter o country id para chave estrangeira na tabela disasters
