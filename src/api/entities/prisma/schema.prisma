@@ -1,21 +1,56 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  url      = "postgresql://is:is@localhost:10002/is?schema=public"
 }
 
-model Teacher {
-  name       String   @id
-  city       String
-  createdOn  DateTime @default(now()) @map("created_on")
-  updatedOn  DateTime @updatedAt @map("updated_on")
+model Category {
+  id             String    @id @default(dbgenerated("uuid_generate_v4()")) @map("id") @db.Uuid
+  categoryName   String    @map("category_name") @db.VarChar(255)
+  accidentsTypes String?   @map("accidents_types") @db.VarChar(255)
+  damageTypes    String?   @map("damage_types") @db.VarChar(255)
+  createdOn      DateTime  @default(now()) @map("created_on") @db.Timestamp(6)
+  updatedOn      DateTime  @default(now()) @updatedAt @map("updated_on") @db.Timestamp(6)
+  countries      Country[]
 
-  @@map("teachers")
+  @@map("categories")
 }
 
+model Country {
+  id          String     @id @default(dbgenerated("uuid_generate_v4()")) @map("id") @db.Uuid
+  countryName String     @unique @map("country_name") @db.VarChar(250)
+  categoryId  String?    @map("category_id") @db.Uuid
+  createdOn   DateTime   @default(now()) @map("created_on") @db.Timestamp(6)
+  updatedOn   DateTime   @default(now()) @updatedAt @map("updated_on") @db.Timestamp(6)
+  category    Category?  @relation(fields: [categoryId], references: [id], onUpdate: NoAction, map: "category_id_fk")
+  disasters   Disaster[]
+
+  @@map("countries")
+}
+
+model Disaster {
+  id           String                   @id @default(dbgenerated("uuid_generate_v4()")) @map("id") @db.Uuid
+  date         DateTime?                @db.Date
+  geom         Unsupported("geometry")? @map("geom")
+  aircraftType String?                  @map("aircraft_type") @db.VarChar(255)
+  operator     String?                  @map("operator") @db.VarChar(255)
+  fatalities   Int?
+  countryId    String?                  @map("country_id") @db.Uuid
+  createdOn    DateTime                 @default(now()) @map("created_on") @db.Timestamp(6)
+  updatedOn    DateTime                 @default(now()) @updatedAt @map("updated_on") @db.Timestamp(6)
+  country      Country?                 @relation(fields: [countryId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "country_id_fk")
+
+  @@map("disasters")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+model spatial_ref_sys {
+  srid      Int     @id
+  auth_name String? @db.VarChar(256)
+  auth_srid Int?
+  srtext    String? @db.VarChar(2048)
+  proj4text String? @db.VarChar(2048)
+}

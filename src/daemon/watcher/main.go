@@ -4,55 +4,53 @@ import (
 	"database/sql"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
-	"io"
 	"time"
-	"github.com/streadway/amqp"
+
 	_ "github.com/lib/pq"
+	"github.com/streadway/amqp"
 )
 
-// Document represents the structure of the XML document
-type Document struct {
-	XMLName   xml.Name `xml:"document"`
-	FileName  string   `xml:"file_name"`
-	XML       string   `xml:"xml"`
-	CreatedOn time.Time `xml:"created_on"`
-}
-
-
 const (
-	// ... (constantes existentes)
-	queueName   = "migrator_queue"
-	routingKey  = "new_file"
+	queueName    = "migrator_queue"
+	routingKey   = "new_file"
 	exchangeName = "xml_files"
 )
 
 var (
-	dbUser     = "is"
-	dbPassword = "is"
-	dbName     = "is"
-	dbHost     = "db-xml"
-	dbPort     = 5432
-	rabbitMQUser   = os.Getenv("RABBITMQ_DEFAULT_USER")
-	rabbitMQPass   = os.Getenv("RABBITMQ_DEFAULT_PASS")
-	rabbitMQVHost  = os.Getenv("RABBITMQ_DEFAULT_VHOST")
-	rabbitMQAddr   = "amqp://" + rabbitMQUser + ":" + rabbitMQPass + "@broker:5672/" + rabbitMQVHost
-	rabbitMQPort     = 5672
+	dbUser        = "is"
+	dbPassword    = "is"
+	dbName        = "is"
+	dbHost        = "db-xml"
+	dbPort        = 5432
+	rabbitMQUser  = os.Getenv("RABBITMQ_DEFAULT_USER")
+	rabbitMQPass  = os.Getenv("RABBITMQ_DEFAULT_PASS")
+	rabbitMQVHost = os.Getenv("RABBITMQ_DEFAULT_VHOST")
+	rabbitMQAddr  = "amqp://" + rabbitMQUser + ":" + rabbitMQPass + "@broker:5672/" + rabbitMQVHost
+	rabbitMQPort  = 5672
 )
 
+type GeoLocation struct {
+	Latitude  float64
+	Longitude float64
+}
 
 type DisasterMessage struct {
 	Date         string
 	AircraftType string
 	Operator     string
 	Fatalities   string
+	Country      string
+	Geo          *GeoLocation
 }
 
 type CountryMessage struct {
-	Name      string
-	Disasters []DisasterMessage
+	Name         string
+	CategoryName string
+	Disasters    []DisasterMessage
 }
 
 type CategoryMessage struct {
@@ -61,6 +59,7 @@ type CategoryMessage struct {
 	DamageType   string
 	Countries    []CountryMessage
 }
+
 func getAttributeValue(se xml.StartElement, attributeName string) string {
 	for _, attr := range se.Attr {
 		if attr.Name.Local == attributeName {
@@ -70,57 +69,174 @@ func getAttributeValue(se xml.StartElement, attributeName string) string {
 	return ""
 }
 
-var category CategoryMessage
-var currentCountry CountryMessage
-var currentDisaster DisasterMessage
-var currentElement string
-var currentElementData string
-
-func main() {
-	// Connect to PostgreSQL database
+func connectToPostgreSQL() (*sql.DB, error) {
 	connStr := fmt.Sprintf("user=%s password=%s host=%s port=%d dbname=%s sslmode=disable",
 		dbUser, dbPassword, dbHost, dbPort, dbName)
 	db, err := sql.Open("postgres", connStr)
+	if err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+func connectToRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
+	amqpConn, err := amqp.Dial(rabbitMQAddr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	ch, err := amqpConn.Channel()
+	if err != nil {
+		amqpConn.Close()
+		return nil, nil, err
+	}
+
+	return amqpConn, ch, nil
+}
+
+func publishToRabbitMQ(ch *amqp.Channel, exchange, routingKey, contentType string, body []byte) error {
+	err := ch.Publish(
+		exchange,
+		routingKey,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: contentType,
+			Body:        body,
+		},
+	)
+
+	return err
+}
+
+func processXML(xmlContent string, ch *amqp.Channel) error {
+	var category CategoryMessage
+	var currentCountry CountryMessage
+	var currentDisaster DisasterMessage
+	var currentElement string
+
+	xmlDoc := xml.NewDecoder(strings.NewReader(xmlContent))
+
+	for {
+		t, err := xmlDoc.Token()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return fmt.Errorf("Error reading XML token: %v", err)
+		}
+
+		switch se := t.(type) {
+		case xml.StartElement:
+			currentElement = se.Name.Local
+
+			switch currentElement {
+			case "category":
+				category = CategoryMessage{
+					Name:         getAttributeValue(se, "name"),
+					AccidentType: getAttributeValue(se, "accident_type"),
+					DamageType:   getAttributeValue(se, "damage_type"),
+				}
+			case "country":
+				currentCountry = CountryMessage{
+					Name:         getAttributeValue(se, "name"),
+					CategoryName: category.Name,
+				}
+			case "disaster":
+				currentDisaster = DisasterMessage{
+					Country: currentCountry.Name,
+				}
+			case "date", "aircraft_type", "operator", "fatalities":
+				switch currentElement {
+				case "date":
+					currentDisaster.Date = getAttributeValue(se, "text")
+				case "aircraft_type":
+					currentDisaster.AircraftType = getAttributeValue(se, "text")
+				case "operator":
+					currentDisaster.Operator = getAttributeValue(se, "text")
+				case "fatalities":
+					currentDisaster.Fatalities = getAttributeValue(se, "text")
+				}
+			}
+
+		case xml.EndElement:
+			switch se.Name.Local {
+			case "category":
+				categoryMessage := CategoryMessage{
+					Name:         category.Name,
+					AccidentType: category.AccidentType,
+					DamageType:   category.DamageType,
+				}
+
+				xmlData, err := xml.Marshal(categoryMessage)
+				if err != nil {
+					log.Println("Error marshaling XML category:", err)
+					continue
+				}
+
+				err = publishToRabbitMQ(ch, exchangeName, routingKey, "category", xmlData)
+				if err != nil {
+					log.Println("Error publishing message to RabbitMQ:", err)
+				}
+			case "country":
+				xmlData, err := xml.Marshal(currentCountry)
+				if err != nil {
+					log.Println("Error marshaling XML country:", err)
+					continue
+				}
+
+				err = publishToRabbitMQ(ch, exchangeName, routingKey, "country", xmlData)
+				if err != nil {
+					log.Println("Error publishing country message to RabbitMQ:", err)
+				}
+			case "disaster":
+				xmlData, err := xml.Marshal(currentDisaster)
+				if err != nil {
+					log.Println("Error marshaling XML disaster:", err)
+					continue
+				}
+				if currentDisaster.Geo == nil {
+					err = publishToRabbitMQ(ch, exchangeName, routingKey, "disaster without geo", xmlData)
+					if err != nil {
+						log.Println("Error publishing disaster message to RabbitMQ:", err)
+					}
+				} else {
+					err = publishToRabbitMQ(ch, exchangeName, routingKey, "disaster", xmlData)
+					if err != nil {
+						log.Println("Error publishing disaster message to RabbitMQ:", err)
+					}
+				}
+
+			}
+		}
+	}
+
+	return nil
+}
+
+func main() {
+	db, err := connectToPostgreSQL()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	// Connect to RabbitMQ broker
-	amqpConn, err := amqp.Dial(rabbitMQAddr)
+	amqpConn, ch, err := connectToRabbitMQ()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer amqpConn.Close()
-
-	ch, err := amqpConn.Channel()
-	if err != nil {
-		log.Fatal(err)
-	}
 	defer ch.Close()
 
-	// Declare RabbitMQ exchange
-	err = ch.ExchangeDeclare(
-		"xml_files",
-		"direct",
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// Query postgres para novas entrada
 	stmt, err := db.Prepare(`SELECT file_name, xml, created_on FROM imported_documents WHERE created_on > $1`)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer stmt.Close()
 
+	fmt.Println(" [*] Waiting for changes in DB. To exit, press CTRL+C")
 	lastCheckTime := time.Now()
+
 	for {
 		rows, err := stmt.Query(lastCheckTime)
 		if err != nil {
@@ -129,7 +245,6 @@ func main() {
 			continue
 		}
 
-		// Process the new XML files
 		for rows.Next() {
 			var fileName, xmlContent string
 			var createdOn time.Time
@@ -139,158 +254,22 @@ func main() {
 				continue
 			}
 
-			// Parsing do ficheiro XML
-            xmlDoc := xml.NewDecoder(strings.NewReader(xmlContent))
+			err = processXML(xmlContent, ch)
+			if err != nil {
+				log.Println("Error processing XML:", err)
+			}
 
-            for {
-                t, err := xmlDoc.Token()
-                if err != nil {
-                    if err == io.EOF {
-                        break
-                    }
-                    log.Println("Error reading XML token:", err)
-                    break
-                }
+			fmt.Printf(" [*] New XML file detected: %s (created on %s)\n", fileName, createdOn.Format(time.RFC3339))
 
-                switch se := t.(type) {
-                case xml.StartElement:
-                    currentElement = se.Name.Local
+		}
 
-                    switch currentElement {
-                    case "category":
-                        category = CategoryMessage{
-                            Name:         getAttributeValue(se, "name"),
-                            AccidentType: getAttributeValue(se, "accident_type"),
-                            DamageType:   getAttributeValue(se, "damage_type"),
-                        }
-                    case "country":
-                        currentCountry = CountryMessage{
-                            Name: getAttributeValue(se, "name"),
-                        }
-                    case "disaster":
-                        currentDisaster = DisasterMessage{}
-                    case "date", "aircraft_type", "operator", "fatalities":
-                        currentElementData = se.Name.Local
-                        switch currentElement {
-                            case "date":
-                                currentDisaster.Date = getAttributeValue(se, "text")
-                            case "aircraft_type":
-                                currentDisaster.AircraftType = getAttributeValue(se, "text")
-                            case "operator":
-                                currentDisaster.Operator = getAttributeValue(se, "text")
-                            case "fatalities":
-                                currentDisaster.Fatalities = getAttributeValue(se, "text")
-                        }
-                   }
+		lastCheckTime = time.Now()
 
+		err = rows.Close()
+		if err != nil {
+			log.Println("Error closing rows:", err)
+		}
 
-                case xml.EndElement:
-                    switch se.Name.Local {
-                    case "category":
-                        categoryMessage := CategoryMessage{
-                            Name:         category.Name,
-                            AccidentType: category.AccidentType,
-                            DamageType:   category.DamageType,
-                        }
-
-                        for _, country := range category.Countries {
-                            countryMessage := CountryMessage{
-                                Name: country.Name,
-                            }
-
-                            for _, disaster := range country.Disasters {
-                                disasterMessage := DisasterMessage{
-                                    Date:         disaster.Date,
-                                    AircraftType: disaster.AircraftType,
-                                    Operator:     disaster.Operator,
-                                    Fatalities:   disaster.Fatalities,
-                                }
-
-                                countryMessage.Disasters = append(countryMessage.Disasters, disasterMessage)
-                            }
-
-                            categoryMessage.Countries = append(categoryMessage.Countries, countryMessage)
-                        }
-
-                        xmlData, err := xml.Marshal(categoryMessage)
-                        if err != nil {
-                            log.Println("Error marshaling XML category:", err)
-                            continue
-                        }
-
-                        err = ch.Publish(
-                            exchangeName,
-                            routingKey,
-                            false,
-                            false,
-                            amqp.Publishing{
-                                ContentType: "category",
-                                Body:        xmlData,
-                            },
-                        )
-                        if err != nil {
-                            log.Println("Error publishing message to RabbitMQ:", err)
-                        }
-                    case "country":
-                        xmlData, err := xml.Marshal(currentCountry)
-                        if err != nil {
-                            log.Println("Error marshaling XML country:", err)
-                            continue
-                        }
-
-                        err = ch.Publish(
-                            exchangeName,
-                            routingKey,
-                            false,
-                            false,
-                            amqp.Publishing{
-                                ContentType: "country",
-                                Body:        xmlData,
-                            },
-                        )
-                        if err != nil {
-                            log.Println("Error publishing country message to RabbitMQ:", err)
-                        }
-                    case "disaster":
-                        xmlData, err := xml.Marshal(currentDisaster)
-                        if err != nil {
-                            log.Println("Error marshaling XML disaster:", err)
-                            continue
-                        }
-
-                        err = ch.Publish(
-                            exchangeName,
-                            routingKey,
-                            false,
-                            false,
-                            amqp.Publishing{
-                                ContentType: "disaster",
-                                Body:        xmlData,
-                            },
-                        )
-
-                        if err != nil {
-                            log.Println("Error publishing disaster message to RabbitMQ:", err)
-                        }
-                    }
-                }
-            }
-
-            log.Printf("New XML file detected: %s (created on %s)\n", fileName, createdOn.Format(time.RFC3339))
-        }
-
-
-        // Update the last check time
-        lastCheckTime = time.Now()
-
-        // Close the rows result set
-        err = rows.Close()
-        if err != nil {
-            log.Println("Error closing rows:", err)
-        }
-
-        // Sleep before the next check
-        time.Sleep(10 * time.Second)
-    }
-
+		time.Sleep(10 * time.Second)
+	}
 }

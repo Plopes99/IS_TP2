@@ -13,10 +13,13 @@
     "@emotion/styled": "^11.11.0",
     "@fontsource/roboto": "^5.0.8",
     "@mui/icons-material": "^5.14.19",
-    "@mui/material": "^5.14.20",
+    "@mui/material": "^5.15.5",
+    "axios": "^1.6.5",
+    "has-flag": "^5.0.1",
     "next": "14.0.4",
     "react": "^18",
-    "react-dom": "^18"
+    "react-dom": "^18",
+    "supports-color": "^9.4.0"
   },
   "devDependencies": {
     "autoprefixer": "^10.0.1",
