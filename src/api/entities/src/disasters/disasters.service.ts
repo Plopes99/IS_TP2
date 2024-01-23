@@ -13,10 +13,11 @@ export class DisastersService {
                 date: true,
                 fatalities: true,
                 operator: true,
-                aircraftType: true
+                aircraftType: true,
+                geom:true
             }
         })
-        if (disasters.length === 0) return { message: "Não foram encontrados Categorias!!" }
+        if (disasters.length === 0) return { message: "Não foram encontrados Desastres!!" }
         return disasters;
     }
 
@@ -28,7 +29,8 @@ export class DisastersService {
                     fatalities: dto.fatalities,
                     operator: dto.operator,
                     aircraftType: dto.aircraftType,
-                    countryId: dto.countryId
+                    countryId: dto.countryId,
+                    geom: dto.geom
                 }
             })
         } catch (error) {
@@ -74,7 +76,8 @@ export class DisastersService {
                     date: dto.date,
                     fatalities: dto.fatalities,
                     operator: dto.operator,
-                    aircraftType: dto.aircraftType
+                    aircraftType: dto.aircraftType,
+                    geom: dto.geom
                 },
                 where: {
                     id: disasterID,

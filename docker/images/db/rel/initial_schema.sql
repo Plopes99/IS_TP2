@@ -1,6 +1,7 @@
+-- Active: 1705772418513@@localhost@10001@is@public
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS POSTGIS;
-CREATE EXTENSION IF NOT EXISTS POSTGIS_TOPOLOGY;
+
+
 
 CREATE TABLE public.categories (
 	id              uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -22,7 +23,7 @@ CREATE TABLE public.countries(
 CREATE TABLE public.disasters(
 	id              uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
 	date            DATE,
-	geom            GEOMETRY,
+	geom            JSONB,
     aircraft_type   VARCHAR(255),
     operator        VARCHAR(255),
     fatalities      INT,

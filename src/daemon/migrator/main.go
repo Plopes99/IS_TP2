@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -52,14 +53,16 @@ type DisasterDto struct {
 	Operator     string    `json:"operator"`
 	Fatalities   int       `json:"fatalities"`
 	CountryId    string    `json:"countryId"`
+	Geo          string    `json:"geom"`
 }
 
 type DisasterMessage struct {
-	Date         string `xml:"Date"`
-	AircraftType string `xml:"AircraftType"`
-	Operator     string `xml:"Operator"`
-	Fatalities   string `xml:"Fatalities"`
-	Country      string `xml:"Country"`
+	Date         string          `xml:"Date"`
+	AircraftType string          `xml:"AircraftType"`
+	Operator     string          `xml:"Operator"`
+	Fatalities   string          `xml:"Fatalities"`
+	Country      string          `xml:"Country"`
+	Geo          json.RawMessage `xml:"Geo"`
 }
 type CategoriesDto struct {
 	CategoryName   string `json:"categoryName"`
@@ -128,7 +131,7 @@ func sendPostRequest(endpoint string, data []byte) {
 		return
 	}
 
-	fmt.Printf("POST request to %s successful\n", endpoint)
+	//fmt.Printf("POST request to %s successful\n", endpoint)
 }
 
 func processCountryMessage(body []byte) {
@@ -147,9 +150,8 @@ func processCountryMessage(body []byte) {
 		return
 	}
 
-	fmt.Println("Converted Category Message to JSON:", string(jsonData))
-
-	//sendPostRequest("http://api-entities:8080/countries", jsonData)
+	log.Println(string(jsonData))
+	sendPostRequest("http://api-entities:8080/countries", jsonData)
 }
 
 // Função para obter o country id para chave estrangeira na tabela disasters
@@ -217,18 +219,26 @@ func processDisasterMessage(body []byte) {
 		return
 	}
 
+	geoJSON, err := json.Marshal(disasterMessage.Geo)
+	if err != nil {
+		log.Println("Error converting Geo to JSON:", err)
+		return
+	}
+
 	jsonData, err := json.Marshal(DisasterDto{
 		Date:         parsedDate,
 		AircraftType: disasterMessage.AircraftType,
 		Operator:     disasterMessage.Operator,
 		Fatalities:   fatalities,
 		CountryId:    countryID,
+		Geo:          string(geoJSON),
 	})
+
 	if err != nil {
 		log.Println("Error converting disaster message to JSON:", err)
 		return
 	}
-
+	log.Print(string(jsonData))
 	sendPostRequest("http://api-entities:8080/disasters", jsonData)
 }
 
@@ -266,28 +276,36 @@ func processCategoryMessage(body []byte) {
 		log.Println("Error converting category message to JSON:", err)
 		return
 	}
-
-	fmt.Println("Converted Category Message to JSON:", string(jsonData))
-
 	sendPostRequest("http://api-entities:8080/categories", jsonData)
 }
 
-func callback(ch *amqp.Channel, delivery amqp.Delivery) {
-	contentType := delivery.ContentType
+func consumeQueue(queueName string, ch *amqp.Channel, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-	switch contentType {
-	case "country":
-		processCountryMessage(delivery.Body)
-	case "disaster without geo":
-		processDisasterMessage(delivery.Body)
-	case "category":
-		processCategoryMessage(delivery.Body)
-	default:
-		log.Println("Unknown content type:", contentType)
+	msgs, err := ch.Consume(
+		queueName, // Nome da fila
+		"",        // Consumidor
+		true,      // Autoack
+		false,     // Exclusivo
+		false,     // Sem espera
+		false,     // Opções adicionais
+		nil,       // Tabela de argumentos
+	)
+	if err != nil {
+		log.Fatalf("Error consuming %s messages: %v", queueName, err)
 	}
 
-	if err := delivery.Ack(false); err != nil {
-		log.Println("Error acknowledging message:", err)
+	for msg := range msgs {
+		switch queueName {
+		case "fila_categories":
+			processCategoryMessage(msg.Body)
+		case "fila_countries":
+			processCountryMessage(msg.Body)
+		case "fila_desastres":
+			processDisasterMessage(msg.Body)
+		default:
+			log.Printf("Unknown queue: %s", queueName)
+		}
 	}
 }
 
@@ -299,45 +317,14 @@ func main() {
 	defer conn.Close()
 	defer ch.Close()
 
-	// Connect to PostgreSQL
-	db, err := connectToPostgreSQL()
-	if err != nil {
-		log.Fatalf("Error connecting to PostgreSQL: %v", err)
-	}
-	defer db.Close()
+	var wg sync.WaitGroup
 
-	// Declare the queue
-	_, err = ch.QueueDeclare(
-		queueName, // Queue name
-		true,      // Durable
-		false,     // Delete when unused
-		false,     // Exclusive
-		false,     // No-wait
-		nil,       // Arguments
-	)
-	if err != nil {
-		log.Fatalf("Error declaring queue: %v", err)
-	}
+	// Start consumers in separate goroutines
+	wg.Add(3)
+	go consumeQueue("fila_categories", ch, &wg)
+	go consumeQueue("fila_countries", ch, &wg)
+	go consumeQueue("fila_desastres", ch, &wg)
 
-	// Configure the consumer
-	msgs, err := ch.Consume(
-		queueName, // Queue name
-		"",        // Consumer
-		false,     // Auto-acknowledge
-		false,     // Exclusive
-		false,     // No-local
-		false,     // No-wait
-		nil,       // Args
-	)
-	if err != nil {
-		log.Fatalf("Error setting up consumer: %v", err)
-	}
-
-	// Wait for messages
-	fmt.Println(" [*] Waiting for messages. To exit, press CTRL+C")
-	for delivery := range msgs {
-		go callback(ch, delivery)
-	}
-
-	// The rest of your Go code for checking updates and database operations goes here...
+	// Wait for consumers to finish
+	wg.Wait()
 }

@@ -1,11 +1,11 @@
-import { IsDate, IsOptional, IsString, IsNumber } from 'class-validator';
+import { IsDate, IsOptional, IsString, IsNumber, IsJSON } from 'class-validator';
 
 export class DisasterDTO {
   @IsString()
   date?: Date;
 
   @IsOptional()
-  @IsString()
+  @IsJSON()
   geom?: any;
 
   @IsString()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -33,18 +34,13 @@ var (
 	rabbitMQPort  = 5672
 )
 
-type GeoLocation struct {
-	Latitude  float64
-	Longitude float64
-}
-
 type DisasterMessage struct {
 	Date         string
 	AircraftType string
 	Operator     string
 	Fatalities   string
 	Country      string
-	Geo          *GeoLocation
+	Geo          json.RawMessage
 }
 
 type CountryMessage struct {
@@ -145,6 +141,7 @@ func processXML(xmlContent string, ch *amqp.Channel) error {
 			case "disaster":
 				currentDisaster = DisasterMessage{
 					Country: currentCountry.Name,
+					Geo:     json.RawMessage(`{"type":"Point","coordinates":[0,0]}`),
 				}
 			case "date", "aircraft_type", "operator", "fatalities":
 				switch currentElement {
@@ -174,7 +171,7 @@ func processXML(xmlContent string, ch *amqp.Channel) error {
 					continue
 				}
 
-				err = publishToRabbitMQ(ch, exchangeName, routingKey, "category", xmlData)
+				err = publishToRabbitMQ(ch, exchangeName, "categories", "category", xmlData)
 				if err != nil {
 					log.Println("Error publishing message to RabbitMQ:", err)
 				}
@@ -185,7 +182,7 @@ func processXML(xmlContent string, ch *amqp.Channel) error {
 					continue
 				}
 
-				err = publishToRabbitMQ(ch, exchangeName, routingKey, "country", xmlData)
+				err = publishToRabbitMQ(ch, exchangeName, "countries", "country", xmlData)
 				if err != nil {
 					log.Println("Error publishing country message to RabbitMQ:", err)
 				}
@@ -195,16 +192,10 @@ func processXML(xmlContent string, ch *amqp.Channel) error {
 					log.Println("Error marshaling XML disaster:", err)
 					continue
 				}
-				if currentDisaster.Geo == nil {
-					err = publishToRabbitMQ(ch, exchangeName, routingKey, "disaster without geo", xmlData)
-					if err != nil {
-						log.Println("Error publishing disaster message to RabbitMQ:", err)
-					}
-				} else {
-					err = publishToRabbitMQ(ch, exchangeName, routingKey, "disaster", xmlData)
-					if err != nil {
-						log.Println("Error publishing disaster message to RabbitMQ:", err)
-					}
+
+				err = publishToRabbitMQ(ch, exchangeName, "disaster", "disaster", xmlData)
+				if err != nil {
+					log.Println("Error publishing disaster message to RabbitMQ:", err)
 				}
 
 			}
