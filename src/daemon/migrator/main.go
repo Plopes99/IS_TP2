@@ -56,6 +56,15 @@ type DisasterDto struct {
 	Geo          string    `json:"geom"`
 }
 
+type DisaterGEOMessage struct {
+	ID           string    `json:"id"`
+	CountryID    string    `json:"countryID"`
+	Date         time.Time `json:"date"`
+	AircraftType string    `json:"aircraftType"`
+	Operator     string    `json:"operator"`
+	Fatalities   int       `json:"fatalities"`
+}
+
 type DisasterMessage struct {
 	Date         string          `xml:"Date"`
 	AircraftType string          `xml:"AircraftType"`
@@ -89,6 +98,21 @@ func connectToRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
 	return conn, ch, nil
 }
 
+func publishToRabbitMQ(ch *amqp.Channel, exchange, routingKey, contentType string, body []byte) error {
+	err := ch.Publish(
+		exchange,
+		routingKey,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: contentType,
+			Body:        body,
+		},
+	)
+
+	return err
+}
+
 func connectToPostgreSQL() (*sql.DB, error) {
 	connStr := fmt.Sprintf("user=%s password=%s host=%s port=%s dbname=%s sslmode=disable",
 		dbParams["user"], dbParams["password"], dbParams["host"], dbParams["port"], dbParams["dbname"])
@@ -107,7 +131,7 @@ func connectToPostgreSQL() (*sql.DB, error) {
 	return db, nil
 }
 
-func sendPostRequest(endpoint string, data []byte) {
+func sendPostRequest(endpoint string, data []byte, ch *amqp.Channel) {
 	// Defina um tempo limite para a solicitação
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -125,16 +149,56 @@ func sendPostRequest(endpoint string, data []byte) {
 	}
 	defer resp.Body.Close()
 
+	if strings.HasSuffix(endpoint, "/disasters") {
+		var response map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			log.Fatal("Error decoding response: %v", err)
+		}
+
+		// Obtenha o ID do mapa de resposta (assumindo que o ID está presente na resposta)
+		id, ok := response["id"].(string)
+		if !ok {
+			log.Fatal("ID not found in response")
+		}
+
+		var disasterDTO DisasterDto
+		err := json.Unmarshal(data, &disasterDTO)
+		if err != nil {
+			log.Fatal("Error decoding JSON:", err)
+		}
+
+		disasterGEOMessage := DisaterGEOMessage{
+			ID:           id,
+			CountryID:    disasterDTO.CountryId,
+			Date:         disasterDTO.Date,
+			AircraftType: disasterDTO.AircraftType,
+			Operator:     disasterDTO.Operator,
+			Fatalities:   disasterDTO.Fatalities,
+		}
+
+		jsonMessage, err := json.Marshal(disasterGEOMessage)
+		if err != nil {
+			log.Fatal("Error encoding message to JSON:", err)
+		}
+
+		// Publicar xmlData no RabbitMQ
+		err = publishToRabbitMQ(ch, "xml_files", "update-gis", "update-gis", jsonMessage)
+		if err != nil {
+			log.Fatalf("Error publishing to RabbitMQ: %v", err)
+		}
+
+	}
+
 	// Verifica o sucesso, 200 ou 201
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		log.Printf("Error: Unexpected status code %d\n", resp.StatusCode)
 		return
 	}
 
-	//fmt.Printf("POST request to %s successful\n", endpoint)
+	fmt.Printf("POST request to %s successful\n", endpoint)
 }
 
-func processCountryMessage(body []byte) {
+func processCountryMessage(body []byte, ch *amqp.Channel) {
 	var coutryMessage CountryMessage
 	err := xml.Unmarshal(body, &coutryMessage)
 	if err != nil {
@@ -150,8 +214,7 @@ func processCountryMessage(body []byte) {
 		return
 	}
 
-	log.Println(string(jsonData))
-	sendPostRequest("http://api-entities:8080/countries", jsonData)
+	sendPostRequest("http://api-entities:8080/countries", jsonData, ch)
 }
 
 // Função para obter o country id para chave estrangeira na tabela disasters
@@ -201,7 +264,7 @@ func parseFatalities(fatalities string) (int, error) {
 	return strconv.Atoi(fatalities)
 }
 
-func processDisasterMessage(body []byte) {
+func processDisasterMessage(body []byte, ch *amqp.Channel) {
 	var disasterMessage DisasterMessage
 	err := xml.Unmarshal(body, &disasterMessage)
 	if err != nil {
@@ -238,8 +301,7 @@ func processDisasterMessage(body []byte) {
 		log.Println("Error converting disaster message to JSON:", err)
 		return
 	}
-	log.Print(string(jsonData))
-	sendPostRequest("http://api-entities:8080/disasters", jsonData)
+	sendPostRequest("http://api-entities:8080/disasters", jsonData, ch)
 }
 
 // função para tratar datas
@@ -258,7 +320,7 @@ func parseDate(dateString string) (time.Time, error) {
 	return parsedDate, parseError
 }
 
-func processCategoryMessage(body []byte) {
+func processCategoryMessage(body []byte, ch *amqp.Channel) {
 	var categoryMessage CategoryMessage
 	err := xml.Unmarshal(body, &categoryMessage)
 	if err != nil {
@@ -276,7 +338,7 @@ func processCategoryMessage(body []byte) {
 		log.Println("Error converting category message to JSON:", err)
 		return
 	}
-	sendPostRequest("http://api-entities:8080/categories", jsonData)
+	sendPostRequest("http://api-entities:8080/categories", jsonData, ch)
 }
 
 func consumeQueue(queueName string, ch *amqp.Channel, wg *sync.WaitGroup) {
@@ -298,11 +360,11 @@ func consumeQueue(queueName string, ch *amqp.Channel, wg *sync.WaitGroup) {
 	for msg := range msgs {
 		switch queueName {
 		case "fila_categories":
-			processCategoryMessage(msg.Body)
+			processCategoryMessage(msg.Body, ch)
 		case "fila_countries":
-			processCountryMessage(msg.Body)
+			processCountryMessage(msg.Body, ch)
 		case "fila_desastres":
-			processDisasterMessage(msg.Body)
+			processDisasterMessage(msg.Body, ch)
 		default:
 			log.Printf("Unknown queue: %s", queueName)
 		}
