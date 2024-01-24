@@ -48,7 +48,6 @@ class CSVHandler(FileSystemEventHandler):
 
     async def convert_csv(self, csv_path):
         # here we avoid converting the same file again
-        # !TODO: check converted files in the database
         if csv_path in await self.get_converted_files():
             return
 
@@ -98,7 +97,6 @@ class CSVHandler(FileSystemEventHandler):
             try:
                 cursor = connection.cursor()
 
-            # Fetch the file names from the converted_documents table
                 cursor.execute('SELECT dst FROM converted_documents')
                 converted_files = [record[0] for record in cursor.fetchall()]
                 print(converted_files[0])
