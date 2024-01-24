@@ -2,17 +2,9 @@ import sys
 import time
 import os
 import pika
-from geopy.geocoders import Nominatim
 import json
 import requests
 
-POLLING_FREQ = int(sys.argv[1]) if len(sys.argv) >= 2 else 60
-ENTITIES_PER_ITERATION = int(sys.argv[2]) if len(sys.argv) >= 3 else 10
-
-# Configurações da fila
-queueName = "migrator_queue"
-routingKey = "new_file"
-exchangeName = "xml_files"
 
 rabbitMQUser = "is"
 rabbitMQPass = "is"
@@ -79,12 +71,11 @@ def obter_coordenadas_nominatim(nome_pais):
     return GeoLocation(latitude, longitude)
 
 def get_country_name_by_id(country_id):
-    # Substitua a URL pelo seu endpoint real
     url = f"http://api-entities:8080/countries/{country_id}"
 
     try:
         response = requests.get(url)
-        response.raise_for_status()  # Lança uma exceção para códigos de erro HTTP
+        response.raise_for_status()  
         country_data = response.json()
         country_name = country_data.get("countryName")
 
@@ -113,9 +104,8 @@ def update_disaster(disaster_message, geo, countryId):
     }
 
     try:
-        # Faz a requisição PUT para atualizar as informações
         response = requests.put(url, json=update_data)
-        response.raise_for_status()  # Lança uma exceção para códigos de erro HTTP
+        response.raise_for_status()  
 
         if response.status_code == 200:
             print(f"Atualização bem-sucedida para a entidade {disaster_message.id}")
@@ -139,15 +129,11 @@ def callback(ch, method, properties, body):
 if __name__ == "__main__":
 
     try:
-        # Conectar-se ao RabbitMQ
         connection = pika.BlockingConnection(pika.URLParameters(rabbitMQAddr))
         channel = connection.channel()
 
-
-        # Configurar o consumidor
         channel.basic_consume(queue='fila_update-gis', on_message_callback=callback, auto_ack=True)
 
-        # Aguardar por mensagens
         print(' [*] Aguardando por mensagens. Para sair pressione CTRL+C')
         channel.start_consuming()
 
@@ -157,7 +143,7 @@ if __name__ == "__main__":
         print("Interrompendo o consumidor.")
     finally:
         if connection and connection.is_open:
-            # Fechar a conexão ao final
+            # Fecha a conexão
             connection.close()
 
     

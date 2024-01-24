@@ -132,15 +132,13 @@ func connectToPostgreSQL() (*sql.DB, error) {
 }
 
 func sendPostRequest(endpoint string, data []byte, ch *amqp.Channel) {
-	// Defina um tempo limite para a solicitação
+	// Tempo limite para a solicitação
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 	}
 
-	// Faça uma solicitação POST para o endpoint especificado
 	resp, err := client.Post(endpoint, "application/json", bytes.NewBuffer(data))
 	if err != nil {
-		// Verifique se o erro é devido a um timeout
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		} else {
 			log.Fatal("Error sending POST request:", err)
@@ -155,12 +153,13 @@ func sendPostRequest(endpoint string, data []byte, ch *amqp.Channel) {
 			log.Fatal("Error decoding response: %v", err)
 		}
 
-		// Obtenha o ID do mapa de resposta (assumindo que o ID está presente na resposta)
+		//buscar o id da resposta
 		id, ok := response["id"].(string)
 		if !ok {
 			log.Fatal("ID not found in response")
 		}
 
+		// buscar o desastre enviado para a api
 		var disasterDTO DisasterDto
 		err := json.Unmarshal(data, &disasterDTO)
 		if err != nil {
@@ -181,7 +180,7 @@ func sendPostRequest(endpoint string, data []byte, ch *amqp.Channel) {
 			log.Fatal("Error encoding message to JSON:", err)
 		}
 
-		// Publicar xmlData no RabbitMQ
+		// publicar tarefa no RabbitMQ
 		err = publishToRabbitMQ(ch, "xml_files", "update-gis", "update-gis", jsonMessage)
 		if err != nil {
 			log.Fatalf("Error publishing to RabbitMQ: %v", err)
@@ -199,15 +198,15 @@ func sendPostRequest(endpoint string, data []byte, ch *amqp.Channel) {
 }
 
 func processCountryMessage(body []byte, ch *amqp.Channel) {
-	var coutryMessage CountryMessage
-	err := xml.Unmarshal(body, &coutryMessage)
+	var countryMessage CountryMessage
+	err := xml.Unmarshal(body, &countryMessage)
 	if err != nil {
 		log.Println("Error processing country message:", err)
 		return
 	}
 
 	jsonData, err := json.Marshal(CountriesDTO{
-		CountryName: coutryMessage.Name,
+		CountryName: countryMessage.Name,
 	})
 	if err != nil {
 		log.Println("Error converting category message to JSON:", err)
@@ -381,12 +380,11 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// Start consumers in separate goroutines
 	wg.Add(3)
 	go consumeQueue("fila_categories", ch, &wg)
 	go consumeQueue("fila_countries", ch, &wg)
 	go consumeQueue("fila_desastres", ch, &wg)
 
-	// Wait for consumers to finish
+	// espera o final do goroutines
 	wg.Wait()
 }

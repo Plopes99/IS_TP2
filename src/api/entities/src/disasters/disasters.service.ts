@@ -9,6 +9,7 @@ export class DisastersService {
     async getDisasters() {
         const disasters = await this.prisma.disaster.findMany({
             select: {
+                id:true,
                 countryId: true,
                 date: true,
                 fatalities: true,
