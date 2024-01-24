@@ -20,7 +20,7 @@ export default function Home() {
                 <br/>
                 <hr/>
                 <p className={"italic"}>
-                    Luís Teófilo & Jorge Ribeiro
+                    Samuel Gomes, Pedro Lopes e João Cruzeiro
                 </p>
             </div>
         </main>

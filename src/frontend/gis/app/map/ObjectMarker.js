@@ -8,14 +8,14 @@ import {Marker, Popup} from 'react-leaflet';
 import {icon as leafletIcon, point} from "leaflet";
 
 const LIST_PROPERTIES = [
-    {"key": "country", label: "Country", Icon: FlagIcon},
-    {"key": "number", label: "Shirt Number", Icon: ContactsIcon},
-    {"key": "position", label: "Position", Icon: PictureInPictureAltIcon}
+    {"key": "operator", label: "Operator", Icon: ContactsIcon},
+    {"key": "date", label: "Date of occurrence", Icon: ContactsIcon},
+    {"key": "fatalities", label: "Number of fatalities", Icon: ContactsIcon},
 ];
 
 export function ObjectMarker({geoJSON}) {
     const properties = geoJSON?.properties
-    const {id, imgUrl, name} = properties;
+    const {id, imgUrl, operator, date, fatalities} = properties;
     const coordinates = geoJSON?.geometry?.coordinates;
 
     return (
@@ -31,9 +31,9 @@ export function ObjectMarker({geoJSON}) {
                 <List dense={true}>
                     <ListItem>
                         <ListItemIcon>
-                            <Avatar alt={name} src={imgUrl}/>
+                            <Avatar alt={operator} src={imgUrl}/>
                         </ListItemIcon>
-                        <ListItemText primary={name}/>
+                        <ListItemText primary={operator}/>
                     </ListItem>
                     {
                         LIST_PROPERTIES
