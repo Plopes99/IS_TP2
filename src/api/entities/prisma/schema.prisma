@@ -34,7 +34,7 @@ model Country {
 model Disaster {
   id           String                   @id @default(dbgenerated("uuid_generate_v4()")) @map("id") @db.Uuid
   date         DateTime?                @db.Date
-  geom         Unsupported("geometry")? @map("geom")
+  geom         Json?                    @map("geom")
   aircraftType String?                  @map("aircraft_type") @db.VarChar(255)
   operator     String?                  @map("operator") @db.VarChar(255)
   fatalities   Int?

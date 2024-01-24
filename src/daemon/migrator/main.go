@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -52,14 +53,25 @@ type DisasterDto struct {
 	Operator     string    `json:"operator"`
 	Fatalities   int       `json:"fatalities"`
 	CountryId    string    `json:"countryId"`
+	Geo          string    `json:"geom"`
+}
+
+type DisaterGEOMessage struct {
+	ID           string    `json:"id"`
+	CountryID    string    `json:"countryID"`
+	Date         time.Time `json:"date"`
+	AircraftType string    `json:"aircraftType"`
+	Operator     string    `json:"operator"`
+	Fatalities   int       `json:"fatalities"`
 }
 
 type DisasterMessage struct {
-	Date         string `xml:"Date"`
-	AircraftType string `xml:"AircraftType"`
-	Operator     string `xml:"Operator"`
-	Fatalities   string `xml:"Fatalities"`
-	Country      string `xml:"Country"`
+	Date         string          `xml:"Date"`
+	AircraftType string          `xml:"AircraftType"`
+	Operator     string          `xml:"Operator"`
+	Fatalities   string          `xml:"Fatalities"`
+	Country      string          `xml:"Country"`
+	Geo          json.RawMessage `xml:"Geo"`
 }
 type CategoriesDto struct {
 	CategoryName   string `json:"categoryName"`
@@ -86,6 +98,21 @@ func connectToRabbitMQ() (*amqp.Connection, *amqp.Channel, error) {
 	return conn, ch, nil
 }
 
+func publishToRabbitMQ(ch *amqp.Channel, exchange, routingKey, contentType string, body []byte) error {
+	err := ch.Publish(
+		exchange,
+		routingKey,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: contentType,
+			Body:        body,
+		},
+	)
+
+	return err
+}
+
 func connectToPostgreSQL() (*sql.DB, error) {
 	connStr := fmt.Sprintf("user=%s password=%s host=%s port=%s dbname=%s sslmode=disable",
 		dbParams["user"], dbParams["password"], dbParams["host"], dbParams["port"], dbParams["dbname"])
@@ -104,7 +131,7 @@ func connectToPostgreSQL() (*sql.DB, error) {
 	return db, nil
 }
 
-func sendPostRequest(endpoint string, data []byte) {
+func sendPostRequest(endpoint string, data []byte, ch *amqp.Channel) {
 	// Defina um tempo limite para a solicitação
 	client := &http.Client{
 		Timeout: 5 * time.Second,
@@ -122,6 +149,46 @@ func sendPostRequest(endpoint string, data []byte) {
 	}
 	defer resp.Body.Close()
 
+	if strings.HasSuffix(endpoint, "/disasters") {
+		var response map[string]interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			log.Fatal("Error decoding response: %v", err)
+		}
+
+		// Obtenha o ID do mapa de resposta (assumindo que o ID está presente na resposta)
+		id, ok := response["id"].(string)
+		if !ok {
+			log.Fatal("ID not found in response")
+		}
+
+		var disasterDTO DisasterDto
+		err := json.Unmarshal(data, &disasterDTO)
+		if err != nil {
+			log.Fatal("Error decoding JSON:", err)
+		}
+
+		disasterGEOMessage := DisaterGEOMessage{
+			ID:           id,
+			CountryID:    disasterDTO.CountryId,
+			Date:         disasterDTO.Date,
+			AircraftType: disasterDTO.AircraftType,
+			Operator:     disasterDTO.Operator,
+			Fatalities:   disasterDTO.Fatalities,
+		}
+
+		jsonMessage, err := json.Marshal(disasterGEOMessage)
+		if err != nil {
+			log.Fatal("Error encoding message to JSON:", err)
+		}
+
+		// Publicar xmlData no RabbitMQ
+		err = publishToRabbitMQ(ch, "xml_files", "update-gis", "update-gis", jsonMessage)
+		if err != nil {
+			log.Fatalf("Error publishing to RabbitMQ: %v", err)
+		}
+
+	}
+
 	// Verifica o sucesso, 200 ou 201
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		log.Printf("Error: Unexpected status code %d\n", resp.StatusCode)
@@ -131,7 +198,7 @@ func sendPostRequest(endpoint string, data []byte) {
 	fmt.Printf("POST request to %s successful\n", endpoint)
 }
 
-func processCountryMessage(body []byte) {
+func processCountryMessage(body []byte, ch *amqp.Channel) {
 	var coutryMessage CountryMessage
 	err := xml.Unmarshal(body, &coutryMessage)
 	if err != nil {
@@ -147,9 +214,7 @@ func processCountryMessage(body []byte) {
 		return
 	}
 
-	fmt.Println("Converted Category Message to JSON:", string(jsonData))
-
-	//sendPostRequest("http://api-entities:8080/countries", jsonData)
+	sendPostRequest("http://api-entities:8080/countries", jsonData, ch)
 }
 
 // Função para obter o country id para chave estrangeira na tabela disasters
@@ -199,7 +264,7 @@ func parseFatalities(fatalities string) (int, error) {
 	return strconv.Atoi(fatalities)
 }
 
-func processDisasterMessage(body []byte) {
+func processDisasterMessage(body []byte, ch *amqp.Channel) {
 	var disasterMessage DisasterMessage
 	err := xml.Unmarshal(body, &disasterMessage)
 	if err != nil {
@@ -217,19 +282,26 @@ func processDisasterMessage(body []byte) {
 		return
 	}
 
+	geoJSON, err := json.Marshal(disasterMessage.Geo)
+	if err != nil {
+		log.Println("Error converting Geo to JSON:", err)
+		return
+	}
+
 	jsonData, err := json.Marshal(DisasterDto{
 		Date:         parsedDate,
 		AircraftType: disasterMessage.AircraftType,
 		Operator:     disasterMessage.Operator,
 		Fatalities:   fatalities,
 		CountryId:    countryID,
+		Geo:          string(geoJSON),
 	})
+
 	if err != nil {
 		log.Println("Error converting disaster message to JSON:", err)
 		return
 	}
-
-	sendPostRequest("http://api-entities:8080/disasters", jsonData)
+	sendPostRequest("http://api-entities:8080/disasters", jsonData, ch)
 }
 
 // função para tratar datas
@@ -248,7 +320,7 @@ func parseDate(dateString string) (time.Time, error) {
 	return parsedDate, parseError
 }
 
-func processCategoryMessage(body []byte) {
+func processCategoryMessage(body []byte, ch *amqp.Channel) {
 	var categoryMessage CategoryMessage
 	err := xml.Unmarshal(body, &categoryMessage)
 	if err != nil {
@@ -266,28 +338,36 @@ func processCategoryMessage(body []byte) {
 		log.Println("Error converting category message to JSON:", err)
 		return
 	}
-
-	fmt.Println("Converted Category Message to JSON:", string(jsonData))
-
-	sendPostRequest("http://api-entities:8080/categories", jsonData)
+	sendPostRequest("http://api-entities:8080/categories", jsonData, ch)
 }
 
-func callback(ch *amqp.Channel, delivery amqp.Delivery) {
-	contentType := delivery.ContentType
+func consumeQueue(queueName string, ch *amqp.Channel, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-	switch contentType {
-	case "country":
-		processCountryMessage(delivery.Body)
-	case "disaster without geo":
-		processDisasterMessage(delivery.Body)
-	case "category":
-		processCategoryMessage(delivery.Body)
-	default:
-		log.Println("Unknown content type:", contentType)
+	msgs, err := ch.Consume(
+		queueName, // Nome da fila
+		"",        // Consumidor
+		true,      // Autoack
+		false,     // Exclusivo
+		false,     // Sem espera
+		false,     // Opções adicionais
+		nil,       // Tabela de argumentos
+	)
+	if err != nil {
+		log.Fatalf("Error consuming %s messages: %v", queueName, err)
 	}
 
-	if err := delivery.Ack(false); err != nil {
-		log.Println("Error acknowledging message:", err)
+	for msg := range msgs {
+		switch queueName {
+		case "fila_categories":
+			processCategoryMessage(msg.Body, ch)
+		case "fila_countries":
+			processCountryMessage(msg.Body, ch)
+		case "fila_desastres":
+			processDisasterMessage(msg.Body, ch)
+		default:
+			log.Printf("Unknown queue: %s", queueName)
+		}
 	}
 }
 
@@ -299,45 +379,14 @@ func main() {
 	defer conn.Close()
 	defer ch.Close()
 
-	// Connect to PostgreSQL
-	db, err := connectToPostgreSQL()
-	if err != nil {
-		log.Fatalf("Error connecting to PostgreSQL: %v", err)
-	}
-	defer db.Close()
+	var wg sync.WaitGroup
 
-	// Declare the queue
-	_, err = ch.QueueDeclare(
-		queueName, // Queue name
-		true,      // Durable
-		false,     // Delete when unused
-		false,     // Exclusive
-		false,     // No-wait
-		nil,       // Arguments
-	)
-	if err != nil {
-		log.Fatalf("Error declaring queue: %v", err)
-	}
+	// Start consumers in separate goroutines
+	wg.Add(3)
+	go consumeQueue("fila_categories", ch, &wg)
+	go consumeQueue("fila_countries", ch, &wg)
+	go consumeQueue("fila_desastres", ch, &wg)
 
-	// Configure the consumer
-	msgs, err := ch.Consume(
-		queueName, // Queue name
-		"",        // Consumer
-		false,     // Auto-acknowledge
-		false,     // Exclusive
-		false,     // No-local
-		false,     // No-wait
-		nil,       // Args
-	)
-	if err != nil {
-		log.Fatalf("Error setting up consumer: %v", err)
-	}
-
-	// Wait for messages
-	fmt.Println(" [*] Waiting for messages. To exit, press CTRL+C")
-	for delivery := range msgs {
-		go callback(ch, delivery)
-	}
-
-	// The rest of your Go code for checking updates and database operations goes here...
+	// Wait for consumers to finish
+	wg.Wait()
 }
